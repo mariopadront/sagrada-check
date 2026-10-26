@@ -55,15 +55,45 @@ class Clorian:
         })
 
 
-def load_state() -> dict[str, bool] | None:
+def load_state() -> dict[str, int] | None:
+    """Per date: number of consecutive checks it has been available (old bool state still loads)."""
     try:
-        return json.loads(config.STATE_FILE.read_text())
-    except (OSError, ValueError):
+        return {d: int(v) for d, v in json.loads(config.STATE_FILE.read_text()).items()}
+    except (OSError, ValueError, AttributeError):
         return None
 
 
-def save_state(state: dict[str, bool]) -> None:
+def save_state(state: dict[str, int]) -> None:
     config.STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def step(previous: dict[str, int], current: dict[str, bool]) -> tuple[dict[str, list[str]], dict[str, int]]:
+    """Alert lifecycle per date: 'new' (1st available check), 'still' (2nd, once), then silence,
+    'gone' when it was available and no longer is. Returns (dates per event, new counters)."""
+    events: dict[str, list[str]] = {"new": [], "still": [], "gone": []}
+    counts: dict[str, int] = {}
+    for d, ok in current.items():
+        before = previous.get(d, 0)
+        counts[d] = min(before + 1, 3) if ok else 0
+        if ok and before == 0:
+            events["new"].append(d)
+        elif ok and before == 1:
+            events["still"].append(d)
+        elif not ok and before > 0:
+            events["gone"].append(d)
+    return events, counts
+
+
+def event_messages(events: dict[str, list[str]], tickets: int, buy_url: str) -> list[str]:
+    names = lambda ds: ", ".join(pretty(d) for d in ds)
+    msgs = []
+    if events["new"]:
+        msgs.append(f"Tickets available for {names(events['new'])} ({tickets} ticket(s))\nBuy now: {buy_url}")
+    if events["still"]:
+        msgs.append(f"Tickets are still available for {names(events['still'])}\nBuy now: {buy_url}")
+    if events["gone"]:
+        msgs.append(f"Tickets are no longer available for {names(events['gone'])}")
+    return msgs
 
 
 def check(client: Clorian) -> dict[str, bool]:
@@ -78,22 +108,21 @@ def pretty(d: str) -> str:
     return date.fromisoformat(d).strftime("%d %B %Y").lstrip("0")
 
 
-def run_once(client: Clorian, previous: dict[str, bool] | None) -> dict[str, bool]:
+def run_once(client: Clorian, previous: dict[str, int] | None) -> dict[str, int]:
     current = check(client)
     for d, ok in current.items():
         log.info("%s: %s", d, "AVAILABLE" if ok else "no availability")
-        was = previous.get(d, False) if previous is not None else not config.ALERT_ON_STARTUP
-        if ok and not was:
-            notify.send(
-                f"Tickets available for {pretty(d)} "
-                f"({config.NUM_TICKETS} ticket(s))\nBuy now: {config.BUY_URL}"
-            )
+    if previous is None:  # first ever run
+        previous = {} if config.ALERT_ON_STARTUP else {d: 2 for d, ok in current.items() if ok}
+    events, counts = step(previous, current)
+    for msg in event_messages(events, config.NUM_TICKETS, config.BUY_URL):
+        notify.send(msg)
     if config.NOTIFY_EVERY_CHECK:
         lines = [f"{pretty(d)}: {'AVAILABLE' if ok else 'no availability'}" for d, ok in current.items()]
         header = f"Check at {datetime.now():%H:%M} ({config.NUM_TICKETS} ticket(s))"
         notify.send("\n".join([header, *lines]))
-    save_state(current)
-    return current
+    save_state(counts)
+    return counts
 
 
 def main():
