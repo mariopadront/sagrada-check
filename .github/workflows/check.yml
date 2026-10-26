@@ -1,0 +1,43 @@
+name: Sagrada check
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sagrada-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Remembers which dates were already available so you only get alerted on a change.
+      - uses: actions/cache@v4
+        with:
+          path: state.json
+          key: sagrada-state-${{ github.run_id }}
+          restore-keys: sagrada-state-
+
+      - run: python -u main.py --once
+        env:
+          TARGET_DATES: ${{ secrets.TARGET_DATES }}
+          NUM_TICKETS: ${{ secrets.NUM_TICKETS }}
+          NOTIFY_METHOD: telegram
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ALERT_ON_STARTUP: "true"
