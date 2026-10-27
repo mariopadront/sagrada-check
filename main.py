@@ -152,10 +152,27 @@ def once():
     run_once(Clorian(), load_state())
 
 
+def loop_for(minutes: int):
+    """Check repeatedly for a limited time (one scheduled CI job), so a late or skipped cron tick costs little."""
+    if not config.TARGET_DATES:
+        raise SystemExit("Set TARGET_DATES")
+    client, state, end = Clorian(), load_state(), time.time() + minutes * 60
+    while True:
+        try:
+            state = run_once(client, state)
+        except Exception as e:
+            log.warning("Check failed: %s", e)
+        if time.time() + config.CHECK_INTERVAL >= end:
+            return
+        time.sleep(config.CHECK_INTERVAL)
+
+
 if __name__ == "__main__":
     import sys
     try:
-        if "--once" in sys.argv:
+        if "--loop-for" in sys.argv:
+            loop_for(int(sys.argv[sys.argv.index("--loop-for") + 1]))
+        elif "--once" in sys.argv:
             once()
         else:
             main()

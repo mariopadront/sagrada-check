@@ -2,7 +2,7 @@ name: Sagrada check
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,37 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -15,7 +15,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -33,8 +33,11 @@ jobs:
           key: sagrada-state-${{ github.run_id }}
           restore-keys: sagrada-state-
 
-      - run: python -u main.py --once
+      # Each job keeps checking for ~35 min (every 10 min); a new job starts every 30 min, so runs overlap
+      # slightly and GitHub's late/skipped cron ticks leave no big gaps. Concurrency queues the overlap.
+      - run: python -u main.py --loop-for 35
         env:
+          CHECK_INTERVAL: "600"
           TARGET_DATES: ${{ secrets.TARGET_DATES }}
           NUM_TICKETS: ${{ secrets.NUM_TICKETS }}
           NOTIFY_METHOD: telegram
